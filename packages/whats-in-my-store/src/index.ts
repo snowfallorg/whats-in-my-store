@@ -20,6 +20,8 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import edit from './util/edit';
 
+const CHUNK_SIZE = 100;
+
 const main = async () => {
   const args = arg(rootArgs, {
     permissive: true,
@@ -55,13 +57,21 @@ const main = async () => {
     stripStorePath(`/nix/store/${storePath}` as StorePath),
   );
 
-  const packages = await getPackages(
-    packageNames,
-    nixpkgsFlake ? 'flake' : 'channel',
-    nixpkgsFlake || nixpkgsChannel,
-  );
+  const chunks = Math.ceil(packageNames.length / CHUNK_SIZE);
 
-  console.log(packages.slice(0, 10));
+  let packages = [];
+
+  for (let i = 0; i < chunks; i++) {
+    packages.push(
+      ...(await getPackages(
+        packageNames.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE),
+        nixpkgsFlake ? 'flake' : 'channel',
+        nixpkgsFlake || nixpkgsChannel,
+      )),
+    );
+  }
+
+  console.log(JSON.stringify(packages, null, 2));
 };
 
 main().catch((error) => {

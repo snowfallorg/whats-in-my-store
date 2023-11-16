@@ -133,7 +133,7 @@ let
 	cached-package-names = [ ${names.map((name) => `"${name}"`).join(' ')} ];
 	failing-packages = [];
 	evaluating-packages = pkgs.lib.filterAttrs (name: value:
-		(builtins.trace name ((builtins.tryEval value).success && pkgs.lib.isDerivation value && !(builtins.elem value.name failing-packages)))
+		(builtins.tryEval value).success && pkgs.lib.isDerivation value && !(builtins.elem value.name failing-packages)
   ) pkgs;
 	cached-packages = pkgs.lib.filterAttrs (name: value:
 		builtins.elem value.name cached-package-names
