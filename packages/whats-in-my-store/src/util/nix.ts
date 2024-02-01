@@ -179,12 +179,16 @@ let
 		builtins.mapAttrs (package-name: package:
 			let
 				all-outputs = builtins.tryEval package.outputs;
-				outputs = builtins.map (output:
+				outputs = pkgs.lib.foldl (acc: output:
 					let
+						# WARN: This code is extremely delicate. The toString MUST be placed inside the
+						# tryEval and only result.value may be referenced. Otherwise the package will re-eval and
+						# possibly fail.
 						result = builtins.tryEval (builtins.toString package.\${output});
 					in
-						if result.success then result.value else null
-				) (if all-outputs.success then all-outputs.value else []);
+						acc // 
+						(if result.success then { "\${output}" = result.value; } else {})
+				) {} (if all-outputs.success then all-outputs.value else []);
 			in
 				({
 					name = package-name;
@@ -200,7 +204,7 @@ let
 in
 	#packages-data
 	#resolved-namespaces
-	evaluate-namespace "python310Packages" pkgs.python310Packages
+	evaluate-namespace "python311Packages" pkgs.python311Packages
 		`,
     );
 
