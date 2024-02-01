@@ -48,6 +48,8 @@ const prelude = nix`
 		prelude = {
 			system = builtins.currentSystem;
 
+			tf = x: if x then "true" else "false";
+
 			flatten = value:
 				if builtins.isList value then
 					builtins.concatMap prelude.flatten value
@@ -110,7 +112,7 @@ export const expr = async (
     ...execOptions,
     env: {
       ...execOptions.env,
-      NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM: '1',
+      // NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM: '1',
       NIXPKGS_ALLOW_BROKEN: '1',
       NIXPKGS_ALLOW_UNFREE: '1',
       NIXPKGS_ALLOW_INSECURE: '1',
@@ -149,17 +151,9 @@ let
 	pkgs = ${getNixpkgs};
 	cached-package-names = [ ${names.map((name) => `"${name}"`).join(' ')} ];
 	failing-packages = [];
-	evaluating-packages = pkgs.lib.filterAttrs (name: value:
-		let
-			result = builtins.tryEval (
-				pkgs.lib.isDerivation value && builtins.seq value.name true
-			);
-		in
-			result.success && result.value
-  ) pkgs;
-	cached-packages = pkgs.lib.filterAttrs (name: value:
-		builtins.elem value.name cached-package-names
-  ) evaluating-packages;
+
+	is-cached-package = package: builtins.elem package.name cached-package-names;
+
 	get-package-meta = attr: pkg: {
 		inherit attr;
 		name = pkg.name or null;
@@ -169,12 +163,51 @@ let
 			"\${output}" = pkg.\${output};
 		}) {} (pkg.outputs or []);
 	};
+
+	evaluate-package = pkg:
+		let
+			result = builtins.tryEval (
+				pkgs.lib.isDerivation pkg && !(pkgs.lib.attrByPath [ "meta" "broken" ] false pkg) && builtins.seq pkg.name true && pkg ? outputs
+			);
+		in
+			result.success && result.value;
+
+	evaluate-namespace = namespace-name: namespace:
+		let
+			packages = pkgs.lib.filterAttrs (_: evaluate-package) namespace;
+		in
+		builtins.mapAttrs (package-name: package:
+			let
+				all-outputs = builtins.tryEval package.outputs;
+				outputs = builtins.map (output:
+					let
+						result = builtins.tryEval (builtins.toString package.\${output});
+					in
+						if result.success then result.value else null
+				) (if all-outputs.success then all-outputs.value else []);
+			in
+				({
+					name = package-name;
+					description = package.meta.description or null;
+					longDescription = package.meta.longDescription or null;
+					inherit outputs;
+				})
+		) packages;
+
+	evaluating-packages = evaluate-namespace "" pkgs;
+	cached-packages = pkgs.lib.filterAttrs (name: is-cached-package) evaluating-packages;
+	packages-data = pkgs.lib.mapAttrs get-package-meta cached-packages;
 in
-	pkgs.lib.mapAttrs get-package-meta cached-packages
+	#packages-data
+	#resolved-namespaces
+	evaluate-namespace "python310Packages" pkgs.python310Packages
 		`,
     );
 
-    for (const pkg of Object.values(JSON.parse(result))) {
+    console.log(JSON.parse(result));
+    process.exit(1);
+
+    for (const pkg of JSON.parse(result)) {
       packages.push(pkg as Package);
     }
   } catch (error) {
