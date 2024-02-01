@@ -89,10 +89,10 @@ export const expr = async (
   options: {
     json?: boolean;
     impure?: boolean;
-    execOptions?: object;
+    execOptions?: any;
   } = {},
 ) => {
-  const { json = true, impure = true, ...execOptions } = options;
+  const { json = true, impure = true, execOptions = {} } = options;
 
   const expression = [prelude, code].map(escapeNixExpression).join('\n');
 
@@ -108,9 +108,26 @@ export const expr = async (
 
   const output = await exec(command, {
     ...execOptions,
+    env: {
+      ...execOptions.env,
+      NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM: '1',
+      NIXPKGS_ALLOW_BROKEN: '1',
+      NIXPKGS_ALLOW_UNFREE: '1',
+      NIXPKGS_ALLOW_INSECURE: '1',
+    },
   });
 
   return output;
+};
+
+export type Package = {
+  attr: string;
+  name: string;
+  description: string;
+  longDescription: string;
+  outputs: {
+    [name: string]: string;
+  };
 };
 
 export const getPackages = async (
@@ -118,7 +135,7 @@ export const getPackages = async (
   source: 'flake' | 'channel',
   nixpkgs: string,
 ) => {
-  const packages = [];
+  const packages: Array<Package> = [];
 
   const getNixpkgs =
     source === 'flake'
@@ -133,7 +150,12 @@ let
 	cached-package-names = [ ${names.map((name) => `"${name}"`).join(' ')} ];
 	failing-packages = [];
 	evaluating-packages = pkgs.lib.filterAttrs (name: value:
-		(builtins.tryEval value).success && pkgs.lib.isDerivation value && !(builtins.elem value.name failing-packages)
+		let
+			result = builtins.tryEval (
+				pkgs.lib.isDerivation value && builtins.seq value.name true
+			);
+		in
+			result.success && result.value
   ) pkgs;
 	cached-packages = pkgs.lib.filterAttrs (name: value:
 		builtins.elem value.name cached-package-names
@@ -143,13 +165,18 @@ let
 		name = pkg.name or null;
 		description = pkg.meta.description or null;
 		longDescription = pkg.meta.longDescription or null;
+		outputs = pkgs.lib.foldl (acc: output:  acc // {
+			"\${output}" = pkg.\${output};
+		}) {} (pkg.outputs or []);
 	};
 in
 	pkgs.lib.mapAttrs get-package-meta cached-packages
 		`,
     );
 
-    console.log(JSON.parse(result));
+    for (const pkg of Object.values(JSON.parse(result))) {
+      packages.push(pkg as Package);
+    }
   } catch (error) {
     console.error(error);
   }

@@ -4,6 +4,7 @@ import rootArgs from './util/args';
 import log from './util/log';
 import todo from './util/todo';
 import {
+  Package,
   StorePath,
   expr,
   getFlakeInputs,
@@ -57,19 +58,32 @@ const main = async () => {
     stripStorePath(`/nix/store/${storePath}` as StorePath),
   );
 
+  log.info(`Found ${packageNames.length} paths in the Nix Store`);
+  log.info(`Getting packages...`);
+
   const chunks = Math.ceil(packageNames.length / CHUNK_SIZE);
 
-  let packages = [];
+  let packages: Array<Package> = [];
 
-  for (let i = 0; i < chunks; i++) {
-    packages.push(
-      ...(await getPackages(
-        packageNames.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE),
-        nixpkgsFlake ? 'flake' : 'channel',
-        nixpkgsFlake || nixpkgsChannel,
-      )),
-    );
-  }
+  packages.push(
+    ...(await getPackages(
+      packageNames,
+      nixpkgsFlake ? 'flake' : 'channel',
+      nixpkgsFlake || nixpkgsChannel,
+    )),
+  );
+
+  // for (let i = 0; i < chunks; i++) {
+  //   log.info(`Getting packages for chunk ${i + 1} of ${chunks}...`);
+
+  //   packages.push(
+  //     ...(await getPackages(
+  //       packageNames.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE),
+  //       nixpkgsFlake ? 'flake' : 'channel',
+  //       nixpkgsFlake || nixpkgsChannel,
+  //     )),
+  //   );
+  // }
 
   console.log(JSON.stringify(packages, null, 2));
 };
