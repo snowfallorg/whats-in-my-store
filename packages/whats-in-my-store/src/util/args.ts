@@ -12,6 +12,9 @@ const args = {
 
   '--nixpkgs-channel': String,
   '-c': '--nixpkgs-channel',
+
+  '--output': String,
+  '-o': '--output',
 };
 
 export default args;

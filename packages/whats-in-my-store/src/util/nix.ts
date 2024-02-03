@@ -145,15 +145,15 @@ export const expr = async (
 export type Package = {
   attr: string;
   name: string;
-  description: string;
-  longDescription: string;
+  version: string | null;
+  description: string | null;
+  longDescription: string | null;
   outputs: {
     [name: string]: string;
   };
 };
 
 export const getPackages = async (
-  names: string[],
   source: 'flake' | 'channel',
   nixpkgs: string,
 ) => {
@@ -169,10 +169,6 @@ export const getPackages = async (
       nix`
 let
 	pkgs = ${getNixpkgs};
-	cached-package-names = [ ${names.map((name) => `"${name}"`).join(' ')} ];
-	failing-packages = [];
-
-	is-cached-package = package: builtins.elem package.name cached-package-names;
 
 	is-valid-package = name: pkg:
 		let
@@ -302,6 +298,14 @@ let
 in
 	all-packages
 		`,
+      {
+        execOptions: {
+          stdio:
+            args['--verbose'] === 3
+              ? ['ignore', 'inherit', 'inherit']
+              : ['ignore', 'pipe', 'pipe'],
+        },
+      },
     );
 
     const data = JSON.parse(result);

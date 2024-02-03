@@ -42,30 +42,30 @@ const main = async () => {
     nixpkgsFlake = 'flake:nixpkgs';
   }
 
+  log.debug({ flakes: nixpkgsFlake, channel: nixpkgsChannel });
+
   const packagePaths = await fs.readdir(path.resolve('/nix/store'));
+
   const storePaths: StorePath[] = packagePaths.filter(
     (packagePath: string) =>
       isStorePath(`/nix/store/${packagePath}`) && !packagePath.endsWith('.drv'),
   );
-  let packageNames = storePaths.map((storePath) =>
-    stripStorePath(`/nix/store/${storePath}` as StorePath),
-  );
 
-  log.info(`Found ${packageNames.length} paths in the Nix Store`);
+  log.info(`Found ${storePaths.length} paths in the Nix Store`);
   log.info(`Getting packages... This can take a while...`);
 
-  const chunks = Math.ceil(packageNames.length / CHUNK_SIZE);
-
   const packages: Array<Package> = await getPackages(
-    packageNames,
     nixpkgsFlake ? 'flake' : 'channel',
     nixpkgsFlake || nixpkgsChannel,
   );
+
+  const matches: Array<Package> = [];
 
   for (const pkg of packages) {
     let found = false;
 
     for (const [name, file] of Object.entries(pkg.outputs ?? {})) {
+      // @ts-expect-error
       if (storePaths.includes(stripStorePath(file))) {
         found = true;
         log.info(
@@ -92,6 +92,20 @@ const main = async () => {
         }
       }
     }
+
+    if (found) {
+      matches.push(pkg);
+    }
+  }
+
+  if (args['--output']) {
+    const file = path.isAbsolute(args['--output'])
+      ? args['--output']
+      : path.resolve(args['--output']);
+
+    log.info(`Writing matches to ${kleur.bold(file)}...`);
+
+    await fs.writeFile(file, JSON.stringify(matches));
   }
 };
 
