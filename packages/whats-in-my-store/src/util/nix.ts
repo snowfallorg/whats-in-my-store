@@ -1,8 +1,11 @@
 import * as Bun from 'bun';
-import { readFile } from 'bun';
+import arg from '../vendor/arg.cjs';
 import todo from './todo';
 import merge from './merge';
 import edit from './edit';
+import rootArgs from './args';
+
+const args = arg(rootArgs, { permissive: true });
 
 export const exec = async (command: string[], options: object = {}) => {
   const proc = Bun.spawn(command, options);
@@ -39,6 +42,23 @@ export const stripStorePath = (path: StorePath) => {
   }
 
   return match.groups.name;
+};
+
+export const removePackageHashPrefix = (name: string) => {
+  return name.replace(/^[a-zA-Z0-9]{32}-/, '');
+};
+
+export const splitPackageNameVersion = (name: string) => {
+  const match = name.match(/^(?<name>.+?)-(?<version>[^\-]+)$/);
+
+  if (!match || !match.groups) {
+    return { name, version: null };
+  }
+
+  return match.groups as {
+    name: string;
+    groups: string;
+  };
 };
 
 const escapeNixExpression = (code) => code.replaceAll(/'/g, "'\\''");
@@ -137,7 +157,7 @@ export const getPackages = async (
   source: 'flake' | 'channel',
   nixpkgs: string,
 ) => {
-  const packages: Array<Package> = [];
+  let packages: Array<Package> = [];
 
   const getNixpkgs =
     source === 'flake'
@@ -154,65 +174,143 @@ let
 
 	is-cached-package = package: builtins.elem package.name cached-package-names;
 
-	get-package-meta = attr: pkg: {
-		inherit attr;
-		name = pkg.name or null;
-		description = pkg.meta.description or null;
-		longDescription = pkg.meta.longDescription or null;
-		outputs = pkgs.lib.foldl (acc: output:  acc // {
-			"\${output}" = pkg.\${output};
-		}) {} (pkg.outputs or []);
-	};
-
-	evaluate-package = pkg:
+	is-valid-package = name: pkg:
 		let
 			result = builtins.tryEval (
-				pkgs.lib.isDerivation pkg && !(pkgs.lib.attrByPath [ "meta" "broken" ] false pkg) && builtins.seq pkg.name true && pkg ? outputs
+				pkgs.lib.isDerivation pkg
+				&& !(pkgs.lib.attrByPath [ "meta" "broken" ] false pkg)
+				&& builtins.seq pkg.name true
+				&& pkg ? outputs
+				&& builtins.seq "\${pkg}" true
 			);
 		in
-			result.success && result.value;
+			# tkinter fails to evaluate with an "unexpected argument 'x11Support'" error.
+			(!(pkgs.lib.hasSuffix ".tkinter" name))
+			# Other architectures like "pkgsx86_64Darwin" and target packages are not necessary.
+			&& (!(pkgs.lib.hasPrefix "pkgs" name))
+			&& (!(pkgs.lib.hasInfix "Cross." name))
+			# nixosTests aren't necessary.
+			&& (!(pkgs.lib.hasPrefix "nixosTests." name))
+			# nodePackages fails to evaluate with an "unexpected argument 'meta'" error.
+			&& (!(pkgs.lib.hasPrefix "nodePackages" name))
+			# netbsd.libcurses fails with a type error.
+			&& (!(pkgs.lib.hasPrefix "netbsd.libcurses" name))
+			# netbsd.libedit fails with a type error.
+			&& (!(pkgs.lib.hasPrefix "netbsd.libedit" name))
+			# gnomeExtensions.audio-output-switcher no longer exists.
+			&& (!(pkgs.lib.hasPrefix "gnomeExtensions.audio-output-switcher" name))
+			# dockapps.wmsm-app fails due to an undefined variable 'src'.
+			&& (!(pkgs.lib.hasPrefix "dockapps.wmsm-app" name))
+			# dockapps.wmsystemtray fails due to an undefined variable 'platforms'.
+			&& (!(pkgs.lib.hasPrefix "dockapps.wmsystemtray" name))
+			# darwin.opencflite fails due to a type error.
+			&& (!(pkgs.lib.hasPrefix "darwin.opencflite" name))
+			&&
+				${
+          args['--verbose'] === 3
+            ? `(builtins.trace "evaluating attribute: \${name}")`
+            : ''
+        }
+				result.success && result.value;
 
 	evaluate-namespace = namespace-name: namespace:
 		let
-			packages = pkgs.lib.filterAttrs (_: evaluate-package) namespace;
-		in
-		builtins.mapAttrs (package-name: package:
-			let
-				all-outputs = builtins.tryEval package.outputs;
-				outputs = pkgs.lib.foldl (acc: output:
+			packages = pkgs.lib.filterAttrs (name: value: is-valid-package (if namespace-name == "" then "\${name}" else "\${namespace-name}.\${name}") value) namespace;
+			packages-data =
+				builtins.mapAttrs (package-name: package:
 					let
-						# WARN: This code is extremely delicate. The toString MUST be placed inside the
-						# tryEval and only result.value may be referenced. Otherwise the package will re-eval and
-						# possibly fail.
-						result = builtins.tryEval (builtins.toString package.\${output});
+						all-outputs = builtins.tryEval package.outputs;
+						outputs = pkgs.lib.foldl (acc: output:
+							let
+								# WARN: This code is extremely delicate. The toString MUST be placed inside the
+								# tryEval and only result.value may be referenced. Otherwise the package will re-eval and
+								# possibly fail.
+								result = builtins.tryEval (builtins.toString package.\${output});
+							in
+								acc // 
+								(if result.success then { "\${output}" = result.value; } else {})
+						) {} (if all-outputs.success then all-outputs.value else []);
 					in
-						acc // 
-						(if result.success then { "\${output}" = result.value; } else {})
-				) {} (if all-outputs.success then all-outputs.value else []);
-			in
-				({
-					name = package-name;
-					description = package.meta.description or null;
-					longDescription = package.meta.longDescription or null;
-					inherit outputs;
-				})
-		) packages;
+						({
+							attr = if namespace-name == "" then package-name else "\${namespace-name}.\${package-name}";
+							name = package-name;
+							version = package.version or null;
+							description = package.meta.description or null;
+							longDescription = package.meta.longDescription or null;
+							inherit outputs;
+						})
+				) packages;
+		in
+		${
+      args['--verbose'] === 3
+        ? `(builtins.trace "evaluating namespace: \${if namespace-name == "" then "<root>" else namespace-name}")`
+        : ''
+    }
+		packages-data;
 
-	evaluating-packages = evaluate-namespace "" pkgs;
-	cached-packages = pkgs.lib.filterAttrs (name: is-cached-package) evaluating-packages;
-	packages-data = pkgs.lib.mapAttrs get-package-meta cached-packages;
+	root-packages = evaluate-namespace "" pkgs;
+
+	maybe-namespaces = pkgs.lib.filterAttrs (name: value:
+		let
+			result = builtins.tryEval (pkgs.lib.isAttrs value && !(pkgs.lib.isDerivation value) && !(pkgs.lib.isFunction value));
+		in
+			result.success && result.value
+	) pkgs;
+
+	maybe-namespaces-with-packages = pkgs.lib.mapAttrs (namespace-name: namespace:
+		let
+			packages = (pkgs.lib.filterAttrs (name: value: is-valid-package "\${namespace-name}.\${name}" value) namespace);
+		in
+			pkgs.lib.optionalAttrs (
+				# cudaPackages fails to evaluate using "abort" which cannot be caught with tryEval.
+				!(pkgs.lib.hasPrefix "cudaPackages" namespace-name)
+				# vmTools fails when attempting to eval "vmTools.initrd" due to a type/syntax error.
+				&& namespace-name != "vmTools"
+				&& namespace-name != "targetPackages"
+				# We don't want or need the following NixPkgs internal namespaces.
+				&& namespace-name != "lib"
+				&& namespace-name != "__splicedPackages"
+				&& namespace-name != "pkgsBuildBuild"
+				&& namespace-name != "pkgsBuildHost"
+				&& namespace-name != "pkgsBuildTarget"
+				&& namespace-name != "pkgsHostHost"
+				&& namespace-name != "pkgsHostTarget"
+				&& namespace-name != "pkgsTargetTarget"
+				&& namespace-name != "buildPackages"
+				&& namespace-name != "targetPackages"
+				&& namespace-name != "pkgsLLVM"
+				&& namespace-name != "pkgsMusl"
+				&& namespace-name != "pkgsStatic"
+				&& namespace-name != "pkgsCross"
+			) packages
+	) maybe-namespaces;
+
+	evaluating-namespaces = pkgs.lib.foldl (acc: namespace:
+		if builtins.attrNames (maybe-namespaces-with-packages."\${namespace}") == [] then
+			acc
+		else
+			acc // {
+				"\${namespace}" = evaluate-namespace namespace (maybe-namespaces-with-packages."\${namespace}");
+			}
+	) {} (builtins.attrNames maybe-namespaces-with-packages);
+
+	all-packages = builtins.attrValues root-packages ++ (
+		prelude.flatten (prelude.map-attrs-to-list (_: namespace:
+			prelude.map-attrs-to-list (_: package: package) namespace
+		) evaluating-namespaces)
+	);
 in
-	#packages-data
-	#resolved-namespaces
-	evaluate-namespace "python311Packages" pkgs.python311Packages
+	all-packages
 		`,
     );
 
-    console.log(JSON.parse(result));
-    process.exit(1);
+    const data = JSON.parse(result);
 
-    for (const pkg of JSON.parse(result)) {
-      packages.push(pkg as Package);
+    if (Array.isArray(data)) {
+      packages = data;
+    } else {
+      console.error(data);
+      throw new Error('Invalid result, expected an array');
     }
   } catch (error) {
     console.error(error);

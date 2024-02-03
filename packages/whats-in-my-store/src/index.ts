@@ -1,25 +1,18 @@
-import arg from './vendor/arg.cjs';
-import kleur from './vendor/kleur.cjs';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import help from './help';
 import rootArgs from './util/args';
 import log from './util/log';
-import todo from './util/todo';
 import {
   Package,
   StorePath,
-  expr,
-  getFlakeInputs,
   getPackages,
   isStorePath,
-  nix,
+  removePackageHashPrefix,
   stripStorePath,
-  upgradeFlakeInput,
 } from './util/nix';
-import { getTargetUpgrade } from './util/forge';
-import help from './help';
-import * as Bun from 'bun';
-import path from 'node:path';
-import fs from 'node:fs/promises';
-import edit from './util/edit';
+import arg from './vendor/arg.cjs';
+import kleur from './vendor/kleur.cjs';
 
 const CHUNK_SIZE = 100;
 
@@ -59,33 +52,47 @@ const main = async () => {
   );
 
   log.info(`Found ${packageNames.length} paths in the Nix Store`);
-  log.info(`Getting packages...`);
+  log.info(`Getting packages... This can take a while...`);
 
   const chunks = Math.ceil(packageNames.length / CHUNK_SIZE);
 
-  let packages: Array<Package> = [];
-
-  packages.push(
-    ...(await getPackages(
-      packageNames,
-      nixpkgsFlake ? 'flake' : 'channel',
-      nixpkgsFlake || nixpkgsChannel,
-    )),
+  const packages: Array<Package> = await getPackages(
+    packageNames,
+    nixpkgsFlake ? 'flake' : 'channel',
+    nixpkgsFlake || nixpkgsChannel,
   );
 
-  // for (let i = 0; i < chunks; i++) {
-  //   log.info(`Getting packages for chunk ${i + 1} of ${chunks}...`);
+  for (const pkg of packages) {
+    let found = false;
 
-  //   packages.push(
-  //     ...(await getPackages(
-  //       packageNames.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE),
-  //       nixpkgsFlake ? 'flake' : 'channel',
-  //       nixpkgsFlake || nixpkgsChannel,
-  //     )),
-  //   );
-  // }
+    for (const [name, file] of Object.entries(pkg.outputs ?? {})) {
+      if (storePaths.includes(stripStorePath(file))) {
+        found = true;
+        log.info(
+          `Exact match for ${kleur.green(
+            pkg.attr,
+          )}.${name} found at ${kleur.bold(file)}.`,
+        );
+        break;
+      }
+    }
 
-  console.log(JSON.stringify(packages, null, 2));
+    if (!found) {
+      const name = pkg.version ? `${pkg.name}-${pkg.version}` : pkg.name;
+
+      for (const storePath of storePaths) {
+        if (removePackageHashPrefix(storePath) === `${name}`) {
+          found = true;
+          log.info(
+            `Name match for ${kleur.yellow(
+              pkg.attr,
+            )} found at /nix/store/${kleur.bold(storePath)}.`,
+          );
+          break;
+        }
+      }
+    }
+  }
 };
 
 main().catch((error) => {
