@@ -42,7 +42,7 @@ const main = async () => {
     nixpkgsFlake = 'flake:nixpkgs';
   }
 
-  log.debug({ flakes: nixpkgsFlake, channel: nixpkgsChannel });
+  log.debug({ flake: nixpkgsFlake, channel: nixpkgsChannel });
 
   const packagePaths = await fs.readdir(path.resolve('/nix/store'));
 
